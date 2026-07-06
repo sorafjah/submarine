@@ -36,6 +36,12 @@
     font-size:17px; font-weight:700; color:#eaffff; text-shadow:0 2px 6px rgba(0,40,70,.9);
     background:rgba(4,40,66,.55); border-radius:12px; padding:8px 18px; display:none; }
 
+  #viewBtnWrap { display:none; }
+  #btnView { pointer-events:auto; min-height:40px; min-width:44px; font-family:inherit; font-size:12px; font-weight:700;
+    color:#fff; background:rgba(20,90,140,.55); border:2px solid rgba(190,235,255,.5); border-radius:999px;
+    padding:6px 12px; margin-top:6px; backdrop-filter:blur(3px); }
+  #btnView:active, #btnView.on { background:rgba(90,190,255,.7); transform:scale(.95); }
+
   /* ===== コントローラー ===== */
   .ctrl { position:absolute; bottom:calc(18px + env(safe-area-inset-bottom)); pointer-events:none; display:none; }
   .ctrl button { pointer-events:auto; user-select:none; -webkit-user-select:none;
@@ -44,17 +50,24 @@
     box-shadow:0 4px 10px rgba(0,10,25,.4); transition:transform .06s, background .06s; }
   .ctrl button:active, .ctrl button.on { transform:scale(.92); background:rgba(90,190,255,.65); }
   #padWrap { left:calc(16px + env(safe-area-inset-left)); }
-  #pad { display:grid; grid-template-columns:repeat(3,64px); grid-template-rows:repeat(3,64px); gap:4px; }
-  #pad button { border-radius:16px; font-size:26px; }
-  #pad .blank { visibility:hidden; }
+  #stickBase { position:relative; width:150px; height:150px; border-radius:50%; pointer-events:auto;
+    background:rgba(10,55,90,.45); border:3px solid rgba(190,235,255,.4); box-shadow:0 4px 10px rgba(0,10,25,.4); }
+  #stickKnob { position:absolute; left:50%; top:50%; width:66px; height:66px; margin:-33px 0 0 -33px;
+    border-radius:50%; background:rgba(90,190,255,.65); border:3px solid rgba(230,250,255,.85);
+    box-shadow:0 3px 8px rgba(0,10,25,.4); transition:background .1s; }
+  #stickBase.on #stickKnob { background:rgba(140,215,255,.85); }
+  #stickLabelF, #stickLabelB { position:absolute; left:50%; transform:translateX(-50%); font-size:11px;
+    font-weight:700; color:rgba(220,245,255,.7); letter-spacing:.08em; pointer-events:none; }
+  #stickLabelF { top:6px; }
+  #stickLabelB { bottom:6px; }
   #rightWrap { right:calc(16px + env(safe-area-inset-right)); display:flex; align-items:flex-end; gap:14px; }
   .roundBtn { border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
   #btnHand { width:104px; height:104px; font-size:17px;
     background:rgba(255,120,60,.65) !important; border-color:rgba(255,220,170,.8) !important; }
   #btnHand:active, #btnHand.on { background:rgba(255,170,90,.9) !important; }
   #btnHand:disabled { opacity:.45; transform:none; }
-  #btnAccel { width:88px; height:88px; font-size:15px; }
-  #btnBrake { width:70px; height:70px; font-size:13px; }
+  #vertPad { display:flex; flex-direction:column; gap:10px; }
+  #vertPad .roundBtn { width:70px; height:70px; font-size:12px; }
   .btnIcon { font-size:24px; line-height:1; }
 
   /* ===== オーバーレイ ===== */
@@ -104,6 +117,7 @@
     <div class="panel" id="turnPanel">
       <div>ターン <span id="turnVal">1 / 3</span></div>
       <div>ふかさ <span id="depthVal">0m</span></div>
+      <button id="btnView">👁️ 視点かえる</button>
     </div>
   </div>
   <div id="hint"></div>
@@ -111,15 +125,17 @@
 
 <!-- コントローラー -->
 <div class="ctrl" id="padWrap">
-  <div id="pad">
-    <div class="blank"></div><button id="padUp">△</button><div class="blank"></div>
-    <button id="padLeft">◁</button><div class="blank"></div><button id="padRight">▷</button>
-    <div class="blank"></div><button id="padDown">▽</button><div class="blank"></div>
+  <div id="stickBase">
+    <div id="stickKnob"></div>
+    <div id="stickLabelF">まえ</div>
+    <div id="stickLabelB">うしろ</div>
   </div>
 </div>
 <div class="ctrl" id="rightWrap">
-  <button class="roundBtn" id="btnBrake"><span class="btnIcon">🛑</span>とまる</button>
-  <button class="roundBtn" id="btnAccel"><span class="btnIcon">💨</span>すすむ</button>
+  <div id="vertPad">
+    <button class="roundBtn" id="btnUp"><span class="btnIcon">🔼</span>うく</button>
+    <button class="roundBtn" id="btnDown"><span class="btnIcon">🔽</span>しずむ</button>
+  </div>
   <button class="roundBtn" id="btnHand"><span class="btnIcon">🦾</span>キャッチ!</button>
 </div>
 
@@ -175,19 +191,21 @@ const CFG = {
   surfaceY: 0,         // 水面の高さ
   surfacedAt: -1.0,    // これより浅ければ「水面にいる」扱い
   subMaxY: -0.45,      // 潜水艦の上限
-  maxSpeed: 11,
-  accel: 9,
-  brake: 15,
-  drag: 1.1,
-  turnRate: 1.9,       // rad/s
-  vSpeed: 4.6,         // 上下移動速度
+  maxSpeed: 6.5,
+  reverseMax: 3.2,     // 後退の最高速度
+  accel: 4.2,          // まったり加速
+  reverseAccel: 2.6,   // 後退はさらにゆっくり
+  brake: 12,           // 前進からの減速(後退ボタンでまず止まる)
+  drag: 0.9,
+  turnRate: 1.15,      // rad/s (まったり旋回)
+  vSpeed: 4.6,         // 上下移動速度(維持)
   oxyMax: 100,
-  oxyDrain: 100 / 70,  // 約70秒で空
+  oxyDrain: 100 / 140, // 酸素の減りを半分に(実質2倍の時間もつ)
   oxyRecover: 42,      // 水面での回復速度/秒
   totalTurns: 3,
   handRange: 6.2,      // ハンドの伸びる長さ
-  catchNear: 1.4,      // ほぼ確実ゾーン
-  catchFar: 2.6,       // ぎりぎりゾーン
+  catchNear: 2.4,      // ほぼ確実ゾーン(広め)
+  catchFar: 4.4,       // ぎりぎりゾーン(広め)
   oxyOutPenalty: 100,
   safeReturnBonus: 100,
 };
@@ -206,7 +224,9 @@ const S = {
   nextWarnAt: 0,
   wasSurfaced: true,
 };
-const input = { up:false, down:false, left:false, right:false, accel:false, brake:false };
+const input = { up:false, down:false };
+const stick = { x: 0, y: 0 };       // アナログスティック(-1〜1)
+const kbAxis = { x: 0, y: 0 };      // キーボード用の疑似アナログ入力
 
 /* =========================================================
    2. サウンド (Web Audio API)
@@ -605,11 +625,11 @@ function decideCatch() {
     if (d < bestD) { bestD = d; best = c; }
   }
   if (!best || bestD > CFG.catchFar) { hand.result = 'miss'; return; }
-  // 近いほど成功しやすい。泳ぐ魚は少しつかみにくい
+  // 近いほど成功しやすい。ゆるゆる判定
   let pSuccess, pDrop;
-  if (bestD < CFG.catchNear) { pSuccess = 0.8; pDrop = 0.13; }
-  else                       { pSuccess = 0.48; pDrop = 0.27; }
-  if (!best.def.ground) pSuccess *= 0.88;
+  if (bestD < CFG.catchNear) { pSuccess = 0.93; pDrop = 0.05; }
+  else                       { pSuccess = 0.72; pDrop = 0.15; }
+  if (!best.def.ground) pSuccess *= 0.94;
   const r = Math.random();
   if (r < pSuccess)              hand.result = 'success';
   else if (r < pSuccess + pDrop) hand.result = 'drop';
@@ -679,13 +699,13 @@ function updateHand(dt) {
    7. 生きもの
 ========================================================= */
 const SPECIES = [
-  { id:'ao',   name:'あおざかな',       points:150, kind:'fish', ground:false, color:0x4aa8e8, size:0.55, roam:2.1, flee:6.5, count:6 },
-  { id:'org',  name:'オレンジフィッシュ', points:200, kind:'fish', ground:false, color:0xff8c42, size:0.72, roam:2.5, flee:7.6, count:5 },
-  { id:'tai',  name:'ピンクだい',       points:300, kind:'fish', ground:false, color:0xf06292, size:1.0,  roam:2.9, flee:9.2, count:3 },
+  { id:'ao',   name:'あおざかな',       points:150, kind:'fish', ground:false, color:0x4aa8e8, size:0.55, roam:1.3, flee:3.2, count:6 },
+  { id:'org',  name:'オレンジフィッシュ', points:200, kind:'fish', ground:false, color:0xff8c42, size:0.72, roam:1.5, flee:3.7, count:5 },
+  { id:'tai',  name:'ピンクだい',       points:300, kind:'fish', ground:false, color:0xf06292, size:1.0,  roam:1.7, flee:4.3, count:3 },
   { id:'uni',  name:'ウニ',            points:50,  kind:'uni',  ground:true,  color:0x1b1b28, size:0.5,  roam:0.12, flee:0.3, count:5 },
-  { id:'kani', name:'カニ',            points:80,  kind:'kani', ground:true,  color:0xe25822, size:0.55, roam:0.7,  flee:2.0, count:5 },
+  { id:'kani', name:'カニ',            points:80,  kind:'kani', ground:true,  color:0xe25822, size:0.55, roam:0.5,  flee:1.4, count:5 },
   { id:'umi',  name:'ウミウシ',         points:100, kind:'umi',  ground:true,  color:0x8e44ad, size:0.5,  roam:0.3,  flee:0.7, count:4 },
-  { id:'anko', name:'アンコウ',         points:150, kind:'anko', ground:true,  color:0x3b4a5a, size:0.85, roam:0.5,  flee:1.6, count:2 },
+  { id:'anko', name:'アンコウ',         points:150, kind:'anko', ground:true,  color:0x3b4a5a, size:0.85, roam:0.4,  flee:1.1, count:2 },
 ];
 
 function makeFishMesh(def) {
@@ -1046,20 +1066,73 @@ function bindHold(el, key) {
   el.addEventListener('mouseup', off);
   el.addEventListener('mouseleave', off);
 }
-bindHold($('padUp'), 'up');
-bindHold($('padDown'), 'down');
-bindHold($('padLeft'), 'left');
-bindHold($('padRight'), 'right');
-bindHold($('btnAccel'), 'accel');
-bindHold($('btnBrake'), 'brake');
+bindHold($('btnUp'), 'up');
+bindHold($('btnDown'), 'down');
+
+/* --- アナログスティック(左: 前後・旋回) --- */
+const stickBase = $('stickBase'), stickKnob = $('stickKnob');
+const STICK_RADIUS = 55; // ノブが動ける最大距離(px)
+let stickTouchId = null;
+
+function stickApply(clientX, clientY) {
+  const rect = stickBase.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+  let dx = clientX - cx, dy = clientY - cy;
+  const dist = Math.hypot(dx, dy);
+  if (dist > STICK_RADIUS) { dx = dx / dist * STICK_RADIUS; dy = dy / dist * STICK_RADIUS; }
+  stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+  stick.x = clamp(dx / STICK_RADIUS, -1, 1);
+  stick.y = clamp(-dy / STICK_RADIUS, -1, 1); // 上へ倒す = 前進(プラス)
+}
+function stickReset() {
+  stick.x = 0; stick.y = 0;
+  stickKnob.style.transform = 'translate(0px,0px)';
+  stickBase.classList.remove('on');
+}
+
+stickBase.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (stickTouchId !== null) return;
+  const t = e.changedTouches[0];
+  stickTouchId = t.identifier;
+  stickBase.classList.add('on');
+  stickApply(t.clientX, t.clientY);
+}, { passive: false });
+stickBase.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) if (t.identifier === stickTouchId) stickApply(t.clientX, t.clientY);
+}, { passive: false });
+function stickTouchEnd(e) {
+  for (const t of e.changedTouches) if (t.identifier === stickTouchId) { stickTouchId = null; stickReset(); }
+}
+stickBase.addEventListener('touchend', stickTouchEnd, { passive: false });
+stickBase.addEventListener('touchcancel', stickTouchEnd, { passive: false });
+
+// マウス操作(PC確認用)
+let stickMouseDown = false;
+stickBase.addEventListener('mousedown', e => { stickMouseDown = true; stickBase.classList.add('on'); stickApply(e.clientX, e.clientY); });
+addEventListener('mousemove', e => { if (stickMouseDown) stickApply(e.clientX, e.clientY); });
+addEventListener('mouseup', () => { if (stickMouseDown) { stickMouseDown = false; stickReset(); } });
 
 $('btnHand').addEventListener('touchstart', e => { e.preventDefault(); startHand(); }, { passive: false });
 $('btnHand').addEventListener('mousedown', e => { e.preventDefault(); startHand(); });
 
 // キーボード(開発・PC確認用)
-const KEYMAP = { ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', KeyW:'accel', KeyS:'brake' };
-addEventListener('keydown', e => { if (KEYMAP[e.code]) input[KEYMAP[e.code]] = true; if (e.code === 'Space') startHand(); });
-addEventListener('keyup', e => { if (KEYMAP[e.code]) input[KEYMAP[e.code]] = false; });
+const VKEYMAP = { KeyW:'up', KeyS:'down' }; // 上下移動(右ボタン相当)
+const kbHeld = { ArrowUp:false, ArrowDown:false, ArrowLeft:false, ArrowRight:false };
+addEventListener('keydown', e => {
+  if (VKEYMAP[e.code]) input[VKEYMAP[e.code]] = true;
+  if (e.code in kbHeld) kbHeld[e.code] = true;
+  if (e.code === 'Space') startHand();
+});
+addEventListener('keyup', e => {
+  if (VKEYMAP[e.code]) input[VKEYMAP[e.code]] = false;
+  if (e.code in kbHeld) kbHeld[e.code] = false;
+});
+function updateKbAxis() {
+  kbAxis.y = (kbHeld.ArrowUp ? 1 : 0) - (kbHeld.ArrowDown ? 1 : 0);
+  kbAxis.x = (kbHeld.ArrowRight ? 1 : 0) - (kbHeld.ArrowLeft ? 1 : 0);
+}
 
 document.addEventListener('gesturestart', e => e.preventDefault());
 document.addEventListener('dblclick', e => e.preventDefault());
@@ -1103,7 +1176,9 @@ function startTurn() {
 function endTurn(reason) {
   if (S.mode !== 'playing') return;
   S.mode = 'turnEnd';
-  input.up = input.down = input.left = input.right = input.accel = input.brake = false;
+  input.up = input.down = false;
+  stickReset(); stickTouchId = null; stickMouseDown = false;
+  kbHeld.ArrowUp = kbHeld.ArrowDown = kbHeld.ArrowLeft = kbHeld.ArrowRight = false;
   // ハンドが生きものを掴んだままなら解放して状態の破綻を防ぐ
   if (hand.held) { releaseCreature(hand.held); hand.held = null; }
   hand.phase = 'idle'; hand.len = 0;
@@ -1164,6 +1239,8 @@ function showResult() {
 $('btnStart').addEventListener('click', () => { audioInit(); startGame(); });
 $('btnNext').addEventListener('click', () => nextStep());
 $('btnRestart').addEventListener('click', () => startGame());
+$('btnView').addEventListener('click', e => { e.preventDefault(); cycleCamera(); });
+$('btnView').addEventListener('touchstart', e => { e.preventDefault(); cycleCamera(); }, { passive:false });
 
 let hintTimer = null;
 function showHint(text, ms) {
@@ -1179,15 +1256,26 @@ function hideHint() { $('hint').style.display = 'none'; if (hintTimer) { clearTi
    11. 潜水艦の更新 / 酸素 / HUD
 ========================================================= */
 function updateSub(dt) {
-  // 加減速
-  if (input.accel) subState.speed += CFG.accel * dt;
-  else if (input.brake) subState.speed -= CFG.brake * dt;
-  else subState.speed -= CFG.drag * dt;
-  subState.speed = clamp(subState.speed, 0, CFG.maxSpeed);
+  updateKbAxis();
+  // スティックとキーボードを合成(どちらか大きい方=より強い入力を採用)
+  const ay = Math.abs(kbAxis.y) > Math.abs(stick.y) ? kbAxis.y : stick.y; // 前後(+前 / -後)
+  const ax = Math.abs(kbAxis.x) > Math.abs(stick.x) ? kbAxis.x : stick.x; // 旋回(+右 / -左)
 
-  // 旋回
-  const turnIn = (input.left ? 1 : 0) - (input.right ? 1 : 0);
-  subState.yaw += turnIn * CFG.turnRate * dt;
+  // 前進・後退(後退は「まず減速→ゆっくり後退」、アナログで強弱がつく)
+  const fAmt = clamp(ay, 0, 1), bAmt = clamp(-ay, 0, 1);
+  if (fAmt > 0.02) {
+    subState.speed += CFG.accel * fAmt * dt;
+  } else if (bAmt > 0.02) {
+    if (subState.speed > 0.02) subState.speed -= CFG.brake * bAmt * dt;      // まず減速
+    else subState.speed -= CFG.reverseAccel * bAmt * dt;                     // ゆっくり後退
+  } else {
+    if (subState.speed > 0) subState.speed = Math.max(0, subState.speed - CFG.drag * dt);
+    else subState.speed = Math.min(0, subState.speed + CFG.drag * dt);
+  }
+  subState.speed = clamp(subState.speed, -CFG.reverseMax, CFG.maxSpeed);
+
+  // 旋回(アナログで倒し具合に応じた速度)
+  subState.yaw += (-ax) * CFG.turnRate * dt;
 
   // 上下
   const vIn = (input.up ? 1 : 0) - (input.down ? 1 : 0);
@@ -1225,7 +1313,7 @@ function updateSub(dt) {
   // 姿勢の演出
   sub.rotation.y = subState.yaw;
   subState.tilt = lerp(subState.tilt, -subState.vy * 0.05, Math.min(1, dt * 5));
-  subState.roll = lerp(subState.roll, turnIn * 0.16, Math.min(1, dt * 5));
+  subState.roll = lerp(subState.roll, (-ax) * 0.16, Math.min(1, dt * 5));
   subModel.rotation.x = subState.tilt;
   subModel.rotation.z = subState.roll;
   subModel.position.y = Math.sin(perf * 1.7) * 0.08; // ぷかぷか浮遊感
@@ -1278,14 +1366,42 @@ function updateHUD() {
 ========================================================= */
 const _camTarget = new THREE.Vector3();
 const _lookAt = new THREE.Vector3();
+let camMode = 0; // 0:追従 1:顔が見える正面ビュー 2:俯瞰
+function cycleCamera() {
+  camMode = (camMode + 1) % 3;
+  const names = ['🎥 追従カメラ', '😊 かおが見えるカメラ', '🗺️ 俯瞰カメラ'];
+  showHint(names[camMode], 1300);
+}
+
 function updateCamera(dt) {
   if (S.mode === 'playing' || S.mode === 'turnEnd') {
-    const back = 7.5, up = 3.2;
-    _camTarget.set(
-      sub.position.x - Math.sin(subState.yaw) * back,
-      sub.position.y + up,
-      sub.position.z - Math.cos(subState.yaw) * back
-    );
+    const fwdX = Math.sin(subState.yaw), fwdZ = Math.cos(subState.yaw);
+    const rightX = Math.cos(subState.yaw), rightZ = -Math.sin(subState.yaw);
+    if (camMode === 0) {
+      // 追従カメラ: 6時の方向(真後ろ)、もうすこし斜め上から
+      const back = 7.2, up = 4.7;
+      _camTarget.set(
+        sub.position.x - fwdX * back,
+        sub.position.y + up,
+        sub.position.z - fwdZ * back
+      );
+    } else if (camMode === 1) {
+      // かおが見えるカメラ: 正面ではなく斜め前・斜め上から
+      const ahead = 3.0, side = 3.2, up = 2.5;
+      _camTarget.set(
+        sub.position.x + fwdX * ahead + rightX * side,
+        sub.position.y + up,
+        sub.position.z + fwdZ * ahead + rightZ * side
+      );
+    } else {
+      // 俯瞰カメラ: 真上ではなく斜め後ろ・高い位置から
+      const back = 6.0, side = 4.2, up = 10.5;
+      _camTarget.set(
+        sub.position.x - fwdX * back + rightX * side,
+        sub.position.y + up,
+        sub.position.z - fwdZ * back + rightZ * side
+      );
+    }
   } else {
     const a = perf * 0.15;
     _camTarget.set(sub.position.x + Math.cos(a) * 11, sub.position.y + 3.5, sub.position.z + Math.sin(a) * 11);
