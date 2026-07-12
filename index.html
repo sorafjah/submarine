@@ -203,7 +203,8 @@ const CFG = {
   oxyDrain: 100 / 140, // 酸素の減りを半分に(実質2倍の時間もつ)
   oxyRecover: 42,      // 水面での回復速度/秒
   totalTurns: 3,
-  handRange: 6.2,      // ハンドの伸びる長さ
+  handRange: 7.2,      // ハンドの伸びる長さ(でかいハンドで少し長め)
+  handSweepRadius: 2.0,// アームの「途中」がふれた判定の太さ
   catchNear: 2.4,      // ほぼ確実ゾーン(広め)
   catchFar: 4.4,       // ぎりぎりゾーン(広め)
   oxyOutPenalty: 100,
@@ -471,10 +472,7 @@ let propeller;
 {
   const yellow = new THREE.MeshLambertMaterial({ color: 0xffd23f, flatShading: true });
   const yellow2 = new THREE.MeshLambertMaterial({ color: 0xffb703, flatShading: true });
-  const white  = new THREE.MeshLambertMaterial({ color: 0xffffff });
   const black  = new THREE.MeshLambertMaterial({ color: 0x222222 });
-  const dark   = new THREE.MeshLambertMaterial({ color: 0x5a2a2a });
-  const pink   = new THREE.MeshLambertMaterial({ color: 0xff7b8a });
 
   // 胴体 (前が +z)
   const body = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 12), yellow);
@@ -514,43 +512,44 @@ let propeller;
     propeller.add(p);
   }
   subModel.add(propeller);
-
-  // 大きな目 (左右)
-  for (const sx of [-0.45, 0.45]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.34, 12, 10), white);
-    eye.position.set(sx, 0.34, 1.28);
-    eye.scale.z = 0.6;
-    subModel.add(eye);
-    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), black);
-    pupil.position.set(sx * 0.96, 0.34, 1.55);
-    subModel.add(pupil);
-    const hi = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), white);
-    hi.position.set(sx * 0.96 + 0.07, 0.42, 1.66);
-    subModel.add(hi);
-  }
-
-  // 大きな口 (にっこり開いた口 + 舌)
-  const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.42, 12, 10), dark);
-  mouth.position.set(0, -0.32, 1.42);
-  mouth.scale.set(1.25, 0.75, 0.5);
-  subModel.add(mouth);
-  const tongue = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), pink);
-  tongue.position.set(0, -0.46, 1.5);
-  tongue.scale.set(1.1, 0.5, 0.5);
-  subModel.add(tongue);
-
-  // ほっぺ
-  const cheekM = new THREE.MeshLambertMaterial({ color: 0xffa4a4 });
-  for (const sx of [-0.85, 0.85]) {
-    const cheek = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), cheekM);
-    cheek.position.set(sx, -0.05, 1.1);
-    cheek.scale.z = 0.4;
-    subModel.add(cheek);
-  }
 }
 
 // --- 潜水艦の物理状態
 const subState = { yaw: 0, speed: 0, vy: 0, tilt: 0, roll: 0 };
+
+// --- 海底が近いときに出す、やわらかい接地シャドウ
+let subShadow;
+{
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+  grad.addColorStop(0.7, 'rgba(0,0,0,0.28)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  subShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(1.7, 24),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0 })
+  );
+  subShadow.rotation.x = -Math.PI / 2;
+  subShadow.renderOrder = 1;
+  scene.add(subShadow);
+}
+
+function updateSubShadow() {
+  const gy = groundH(sub.position.x, sub.position.z);
+  const dist = sub.position.y - gy;
+  const maxDist = 9; // これより離れたら見えなくなる
+  const t = clamp(1 - dist / maxDist, 0, 1);
+  if (t <= 0.01) { subShadow.visible = false; return; }
+  subShadow.visible = true;
+  subShadow.position.set(sub.position.x, gy + 0.04, sub.position.z);
+  subShadow.material.opacity = t * 0.6;
+  subShadow.scale.setScalar(lerp(0.85, 1.15, t));
+}
 
 /* =========================================================
    6. マジックハンド
@@ -558,14 +557,14 @@ const subState = { yaw: 0, speed: 0, vy: 0, tilt: 0, roll: 0 };
 const hand = {
   group: null, arm: null, claw: null, fingers: [],
   phase: 'idle',     // idle | extend | close | hold | retract
-  t: 0, len: 0, held: null, result: null, dropAt: 0.5,
+  t: 0, len: 0, held: null, result: null, dropAt: 0.5, sweepHit: null,
 };
 {
   hand.group = new THREE.Group();
   hand.group.position.set(0, -0.25, 1.55);
   subModel.add(hand.group);
 
-  const armGeo = new THREE.CylinderGeometry(0.09, 0.09, 1, 8);
+  const armGeo = new THREE.CylinderGeometry(0.16, 0.16, 1, 8);
   armGeo.rotateX(Math.PI / 2);
   armGeo.translate(0, 0, 0.5);   // 原点から +z 方向へ伸びる
   hand.arm = new THREE.Mesh(armGeo, new THREE.MeshLambertMaterial({ color: 0x9aa4ad }));
@@ -577,13 +576,13 @@ const hand = {
   for (let i = 0; i < 3; i++) {
     const pivot = new THREE.Group();
     pivot.rotation.z = (i / 3) * Math.PI * 2;
-    const f = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.5, 0.14), fingerMat);
-    f.position.y = 0.3;
+    const f = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.85, 0.24), fingerMat);
+    f.position.y = 0.5;
     f.rotation.x = 0.25;
     pivot.add(f);
     hand.claw.add(pivot);
   }
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), new THREE.MeshLambertMaterial({ color: 0x6b7680 }));
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 6), new THREE.MeshLambertMaterial({ color: 0x6b7680 }));
   hand.claw.add(palm);
   hand.group.add(hand.claw);
   hand.claw.visible = false;
@@ -606,6 +605,7 @@ function startHand() {
   hand.t = 0;
   hand.held = null;
   hand.result = null;
+  hand.sweepHit = null;
   hand.claw.visible = true;
   setClawOpen(1);
   $('btnHand').disabled = true;
@@ -614,21 +614,47 @@ function startHand() {
 
 const _tip = new THREE.Vector3();
 const _cpos = new THREE.Vector3();
+const _base = new THREE.Vector3();
+const _segAB = new THREE.Vector3();
+const _segAP = new THREE.Vector3();
+const _segClosest = new THREE.Vector3();
+
+function handBaseWorld(out) {
+  hand.group.getWorldPosition(out);
+  return out;
+}
+
+// 点pから線分ab(=アーム全体)までの最短距離。先っちょだけでなく途中でもヒット判定するため
+function distPointToSegment(p, a, b) {
+  _segAB.subVectors(b, a);
+  const abLenSq = _segAB.lengthSq();
+  if (abLenSq < 1e-6) return p.distanceTo(a);
+  _segAP.subVectors(p, a);
+  const t = clamp(_segAP.dot(_segAB) / abLenSq, 0, 1);
+  _segClosest.copy(_segAB).multiplyScalar(t).add(a);
+  return p.distanceTo(_segClosest);
+}
 
 function decideCatch() {
-  clawTipWorld(_tip);
-  let best = null, bestD = Infinity;
-  for (const c of creatures) {
-    if (c.state !== 'roam' && c.state !== 'flee') continue;
-    c.mesh.getWorldPosition(_cpos);
-    const d = _cpos.distanceTo(_tip);
-    if (d < bestD) { bestD = d; best = c; }
+  let best = hand.sweepHit, bestD = 0;
+  if (!best) {
+    // スイープでヒットしていなければ、最後は先っちょ付近を判定
+    clawTipWorld(_tip);
+    let bd = Infinity;
+    for (const c of creatures) {
+      if (c.state !== 'roam' && c.state !== 'flee') continue;
+      c.mesh.getWorldPosition(_cpos);
+      const d = _cpos.distanceTo(_tip);
+      if (d < bd) { bd = d; best = c; }
+    }
+    bestD = bd;
+    if (!best || bestD > CFG.catchFar) { hand.result = 'miss'; return; }
   }
-  if (!best || bestD > CFG.catchFar) { hand.result = 'miss'; return; }
-  // 近いほど成功しやすい。ゆるゆる判定
+  // 近いほど、そしてアームが途中で触れていたほど成功しやすい
   let pSuccess, pDrop;
-  if (bestD < CFG.catchNear) { pSuccess = 0.93; pDrop = 0.05; }
-  else                       { pSuccess = 0.72; pDrop = 0.15; }
+  if (hand.sweepHit)              { pSuccess = 0.95; pDrop = 0.04; }
+  else if (bestD < CFG.catchNear) { pSuccess = 0.93; pDrop = 0.05; }
+  else                             { pSuccess = 0.72; pDrop = 0.15; }
   if (!best.def.ground) pSuccess *= 0.94;
   const r = Math.random();
   if (r < pSuccess)              hand.result = 'success';
@@ -639,6 +665,20 @@ function decideCatch() {
   SFX.grab();
 }
 
+// アームが伸びている間、途中で生きものに触れていないかを調べる
+function findSweepHit() {
+  handBaseWorld(_base);
+  clawTipWorld(_tip);
+  let best = null, bestD = Infinity;
+  for (const c of creatures) {
+    if (c.state !== 'roam' && c.state !== 'flee') continue;
+    c.mesh.getWorldPosition(_cpos);
+    const d = distPointToSegment(_cpos, _base, _tip);
+    if (d < CFG.handSweepRadius && d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+
 function updateHand(dt) {
   if (hand.phase === 'idle') return;
   hand.t += dt;
@@ -646,7 +686,18 @@ function updateHand(dt) {
   if (hand.phase === 'extend') {
     const k = Math.min(1, hand.t / 0.45);
     hand.len = CFG.handRange * (1 - Math.pow(1 - k, 3)); // easeOut
-    if (k >= 1) { hand.phase = 'close'; hand.t = 0; }
+    // この時点の伸び具合を反映してから、途中でふれていないか調べる
+    hand.arm.scale.z = Math.max(0.01, hand.len);
+    hand.claw.position.z = hand.len;
+    sub.updateMatrixWorld(true);
+    const hit = findSweepHit();
+    if (hit) {
+      hand.sweepHit = hit;
+      hand.phase = 'close'; hand.t = 0;
+    } else if (k >= 1) {
+      hand.sweepHit = null;
+      hand.phase = 'close'; hand.t = 0;
+    }
   }
   else if (hand.phase === 'close') {
     const k = Math.min(1, hand.t / 0.18);
@@ -1459,6 +1510,8 @@ function animate(now) {
     updateOxygen(dt);
     updateHUD();
   }
+  if (S.mode === 'playing' || S.mode === 'turnEnd') updateSubShadow();
+  else subShadow.visible = false;
   updateCreatures(dt);
   updateSubBubbles(dt);
   updateSparkles(dt);
